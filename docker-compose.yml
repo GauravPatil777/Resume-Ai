@@ -1,0 +1,32 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    container_name: resume-ai-backend
+
+    env_file:
+      - ./backend/.env
+
+    ports:
+      - "8000:8000"
+
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+      # args(this is only when test locally):
+      #   VITE_API_URL: http://localhost:8000
+
+    container_name: resume-ai-frontend
+
+    ports:
+      - "3000:80"
+
+    depends_on:
+      - backend
+
+    restart: unless-stopped
