@@ -1,0 +1,173 @@
+name: Resume AI CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+  pull_request:
+    branches:
+      - main
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resume-ai-cicd
+  cancel-in-progress: true
+
+jobs:
+
+  # =================================
+  # 1. Backend CI
+  # =================================
+
+  backend-test:
+
+    name: Backend CI
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+
+      - name: Check Python syntax
+        run: |
+          python -m compileall -q backend
+
+
+  # =================================
+  # 2. Frontend CI
+  # =================================
+
+  frontend-test:
+
+    name: Frontend CI
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: Frontend
+        run: npm ci
+
+      - name: Build React application
+        working-directory: Frontend
+        env:
+          VITE_API_URL: https://resume-ai-backend-latest.onrender.com
+        run: npm run build
+
+
+  # =================================
+  # 3. Docker Build and Push
+  # =================================
+
+  docker:
+
+    name: Docker Build and Push
+
+    needs:
+      - backend-test
+      - frontend-test
+
+    if: github.event_name != 'pull_request'
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Docker Hub Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+
+      # Backend Image
+
+      - name: Build and Push Backend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          platforms: linux/amd64
+          push: true
+          tags: |
+            gauravpatil77/resume-ai-backend:latest
+            gauravpatil77/resume-ai-backend:${{ github.sha }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+
+      # Frontend Image
+
+      - name: Build and Push Frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Frontend
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VITE_API_URL=https://resume-ai-backend-latest.onrender.com
+          tags: |
+            gauravpatil77/resume-ai-frontend:latest
+            gauravpatil77/resume-ai-frontend:${{ github.sha }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+
+  # =================================
+  # 4. Deploy to Render
+  # =================================
+
+  deploy:
+
+    name: Deploy to Render
+
+    needs: docker
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Deploy Backend
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_BACKEND_HOOK }}
+        run: |
+          curl --fail --silent --show-error "$DEPLOY_HOOK"
+
+      - name: Deploy Frontend
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_FRONTEND_HOOK }}
+        run: |
+          curl --fail --silent --show-error "$DEPLOY_HOOK"
